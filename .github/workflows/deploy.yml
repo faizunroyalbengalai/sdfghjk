@@ -60,6 +60,9 @@ jobs:
       resource_group: ${{ steps.tf_out.outputs.resource_group }}
       namespace:    ${{ steps.tf_out.outputs.namespace }}
       app_port:     ${{ steps.tf_out.outputs.app_port }}
+      db_host:      ${{ steps.tf_out.outputs.db_host }}
+      db_port:      ${{ steps.tf_out.outputs.db_port }}
+      db_name:      ${{ steps.tf_out.outputs.db_name }}
     env:
       ARM_CLIENT_ID:       ${{ secrets.ARM_CLIENT_ID }}
       ARM_CLIENT_SECRET:   ${{ secrets.ARM_CLIENT_SECRET }}
@@ -114,6 +117,12 @@ jobs:
           echo "resource_group=${RG}"      >> $GITHUB_OUTPUT
           echo "namespace=${NS}"           >> $GITHUB_OUTPUT
           echo "app_port=${PORT}"          >> $GITHUB_OUTPUT
+          DB_HOST=$(terraform output -raw db_host 2>/dev/null || true)
+          DB_PORT=$(terraform output -raw db_port 2>/dev/null || true)
+          DB_NAME=$(terraform output -raw db_name 2>/dev/null || true)
+          echo "db_host=${DB_HOST}" >> $GITHUB_OUTPUT
+          echo "db_port=${DB_PORT}" >> $GITHUB_OUTPUT
+          echo "db_name=${DB_NAME}" >> $GITHUB_OUTPUT
           echo "AKS cluster: ${CLUSTER} (rg=${RG}, ns=${NS})"
 
   deploy:
@@ -167,6 +176,21 @@ jobs:
           ARGS+=(--from-literal=PORT=${{ needs.provision.outputs.app_port }})
           ARGS+=(--from-literal=NODE_ENV=production)
           ARGS+=(--from-literal=APP_ENV=production)
+          DB_HOST="${{ needs.provision.outputs.db_host }}"
+          DB_PORT="${{ needs.provision.outputs.db_port }}"
+          DB_NAME="${{ needs.provision.outputs.db_name }}"
+          DB_USER="${{ secrets.DB_USERNAME }}"
+          DB_PASS="${{ secrets.DB_PASSWORD }}"
+          [ -n "$DB_HOST" ] && ARGS+=(--from-literal=DB_HOST="${DB_HOST}")
+          [ -n "$DB_PORT" ] && ARGS+=(--from-literal=DB_PORT="${DB_PORT}")
+          [ -n "$DB_NAME" ] && ARGS+=(--from-literal=DB_NAME="${DB_NAME}")
+          [ -n "$DB_USER" ] && ARGS+=(--from-literal=DB_USER="${DB_USER}")
+          [ -n "$DB_USER" ] && ARGS+=(--from-literal=DB_USERNAME="${DB_USER}")
+          [ -n "$DB_PASS" ] && ARGS+=(--from-literal=DB_PASSWORD="${DB_PASS}")
+          ARGS+=(--from-literal=DB_TYPE=postgres)
+          if [ -n "$DB_HOST" ] && [ -n "$DB_USER" ] && [ -n "$DB_PASS" ] && [ -n "$DB_NAME" ]; then
+            ARGS+=(--from-literal=DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=require")
+          fi
           kubectl create secret generic "${PROJECT_LOWER}-env" \
             --namespace "$NS" \
             "${ARGS[@]}" \

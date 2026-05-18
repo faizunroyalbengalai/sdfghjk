@@ -98,6 +98,11 @@ variable "db_password" {
 locals {
   name_safe = substr(lower(replace(replace(var.project_name, "_", "-"), " ", "-")), 0, 24)
   namespace = local.name_safe
+  effective_db_region    = var.azure_db_region != "" ? var.azure_db_region : var.azure_region
+  db_is_cross_region     = var.azure_db_region != "" && var.azure_db_region != var.azure_region
+  _db_name               = var.db_name != "" ? var.db_name : "${replace(var.project_name, "-", "_")}db"
+  _db_port               = "5432"
+  _db_scheme             = "postgresql"
 }
 
 resource "azurerm_resource_group" "rg" {
@@ -109,6 +114,19 @@ resource "azurerm_resource_group" "rg" {
   }
 }
 
+resource "azurerm_resource_group" "db_rg" {
+  count    = local.db_is_cross_region ? 1 : 0
+  name     = "${var.project_name}-db-rg"
+  location = var.azure_db_region
+  tags = {
+    Project   = var.project_name
+    ManagedBy = "udap"
+  }
+}
+
+locals {
+  db_resource_group_name = local.db_is_cross_region ? azurerm_resource_group.db_rg[0].name : azurerm_resource_group.rg.name
+}
 
 resource "azurerm_kubernetes_cluster" "aks" {
   name                = "${var.project_name}-aks"
@@ -143,6 +161,36 @@ resource "azurerm_kubernetes_cluster" "aks" {
   }
 }
 
+resource "azurerm_postgresql_flexible_server" "db" {
+  name                          = "${var.project_name}-db"
+  resource_group_name           = local.db_resource_group_name
+  location                      = local.effective_db_region
+  version                       = "15"
+  administrator_login           = var.db_username != "" ? var.db_username : "appuser"
+  administrator_password        = var.db_password
+  zone                          = "1"
+  storage_mb                    = 32768
+  sku_name                      = "B_Standard_B1ms"
+  public_network_access_enabled = true
+  tags = {
+    Project   = var.project_name
+    ManagedBy = "udap"
+  }
+}
+
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure" {
+  name             = "allow-azure-services"
+  server_id        = azurerm_postgresql_flexible_server.db.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
+}
+
+resource "azurerm_postgresql_flexible_server_database" "appdb" {
+  name      = local._db_name
+  server_id = azurerm_postgresql_flexible_server.db.id
+  collation = "en_US.utf8"
+  charset   = "utf8"
+}
 
 output "cluster_name" {
   value = azurerm_kubernetes_cluster.aks.name
@@ -160,3 +208,19 @@ output "app_port" {
   value = var.app_port
 }
 
+output "db_host" {
+  value = azurerm_postgresql_flexible_server.db.fqdn
+}
+
+output "db_port" {
+  value = local._db_port
+}
+
+output "db_name" {
+  value = local._db_name
+}
+
+output "db_username" {
+  value     = var.db_username
+  sensitive = true
+}
